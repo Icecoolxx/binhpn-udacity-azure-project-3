@@ -1,10 +1,11 @@
 from app import app, db, queue_client
 from datetime import datetime
 from app.models import Attendee, Conference, Notification
-from flask import render_template, session, request, redirect, url_for, flash, make_response
-from azure.servicebus import ServiceBusMessage
+from flask import render_template, session, request, redirect, url_for, flash, make_response, session
+from azure.servicebus import Message
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 import logging
-import sys
 
 @app.route('/')
 def index():
@@ -25,7 +26,7 @@ def registration():
         attendee.interests = request.form['interest']
         attendee.comments = request.form['message']
         attendee.conference_id = app.config.get('CONFERENCE_ID')
-
+        
         try:
             db.session.add(attendee)
             db.session.commit()
@@ -33,7 +34,7 @@ def registration():
             return redirect('/Registration')
         except:
             logging.error('Error occured while saving your information')
-
+            
     else:
         if 'message' in session:
             message = session['message']
@@ -65,15 +66,29 @@ def notification():
         try:
             db.session.add(notification)
             db.session.commit()
-
-            message = ServiceBusMessage(str(notification.id))
-            queue_client.send_messages(message)
-
+            db.session.refresh(notification)
+            m = '{}'.format(notification.id)
+            try:
+                msg = Message(m)
+                sentResult = queue_client.send(msg)
+            except Exception as e:
+                logging.error(
+                    'An error has ocurred when sending msg to queue {}', str(e))
             return redirect('/Notifications')
-        except :
+        except:
             logging.error('log unable to save notification')
-            logging.error("Unexpected error:", sys.exc_info()[0])
-            raise
 
     else:
         return render_template('notification.html')
+    
+
+
+def send_email(email, subject, body):
+    message = Mail(
+        from_email=app.config.get('ADMIN_EMAIL_ADDRESS'),
+        to_emails=email,
+        subject=subject,
+        plain_text_content=body)
+
+    sg = SendGridAPIClient(app.config.get('SENDGRID_API_KEY'))
+    sg.send(message)
